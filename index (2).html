@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Веста - Реальный чат</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+    <style>
+        body { margin: 0; font-family: 'Inter', sans-serif; background: #dfe6e9; display: flex; justify-content: center; height: 100vh; overflow: hidden;}
+        .app { width: 100%; max-width: 500px; background: white; display: flex; flex-direction: column; height: 100%; position: relative; box-shadow: 0 0 20px rgba(0,0,0,0.1); }
+        
+        /* Экраны */
+        .screen { display: none; flex-direction: column; height: 100%; padding: 20px; box-sizing: border-box; }
+        .screen.active { display: flex; }
+
+        /* Вход */
+        .auth-box { text-align: center; margin-top: 30%; }
+        input { width: 100%; padding: 15px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
+        button { width: 100%; padding: 15px; background: #6c5ce7; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; }
+        button:disabled { background: #b2bec3; }
+        #recaptcha-container { margin: 10px auto; }
+
+        /* Чат */
+        .chat-header { padding: 15px; background: #6c5ce7; color: white; display: flex; justify-content: space-between; align-items: center; }
+        .messages { flex: 1; padding: 15px; overflow-y: auto; background: #f1f2f6; display: flex; flex-direction: column; gap: 10px; }
+        
+        .msg { padding: 10px 15px; border-radius: 15px; max-width: 80%; word-wrap: break-word; font-size: 14px; position: relative; }
+        .msg.my { align-self: flex-end; background: #6c5ce7; color: white; border-bottom-right-radius: 2px; }
+        .msg.other { align-self: flex-start; background: white; color: #333; border-bottom-left-radius: 2px; }
+        
+        .msg-sender { font-size: 10px; opacity: 0.7; margin-bottom: 2px; display: block; }
+
+        .input-area { padding: 15px; background: white; border-top: 1px solid #eee; display: flex; gap: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="app">
+        
+        <div id="screen-login" class="screen active">
+            <div class="auth-box">
+                <h1 style="color:#6c5ce7">Веста</h1>
+                <p>Реальная авторизация через SMS</p>
+                <input type="tel" id="phoneNumber" placeholder="+79991234567" value="+7">
+                <div id="recaptcha-container"></div>
+                <button id="sign-in-button" onclick="sendSMS()">Получить код</button>
+            </div>
+        </div>
+
+        <div id="screen-code" class="screen">
+            <div class="auth-box">
+                <h2>Введите код из SMS</h2>
+                <input type="text" id="verificationCode" placeholder="123456">
+                <button onclick="verifyCode()">Войти</button>
+            </div>
+        </div>
+
+        <div id="screen-chat" class="screen">
+            <div class="chat-header">
+                <span id="userPhoneDisplay">Пользователь</span>
+                <button onclick="logout()" style="width: auto; padding: 5px 10px; font-size: 12px; background: #ff7675;">Выйти</button>
+            </div>
+            <div class="messages" id="messagesList">
+                </div>
+            <div class="input-area">
+                <input type="text" id="messageInput" placeholder="Сообщение...">
+                <button style="width: 50px;" onclick="sendMessage()"><i class="fas fa-paper-plane"></i></button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- 1. КОНФИГУРАЦИЯ FIREBASE ---
+        // ЗАМЕНИТЕ ЭТОТ БЛОК НА СВОЙ ИЗ КОНСОЛИ FIREBASE
+        const firebaseConfig = {
+            apiKey: "AIzaSyB3VW40RoD1ncbIXdSWuiAzvzlj8TlEVho",
+            authDomain: "vesta-app-5ae49.firebaseapp.com",
+            projectId: "vesta-app-5ae49",
+            storageBucket: "vesta-app-5ae49.firebasestorage.app",
+            messagingSenderId: "738138840790",
+            appId: "1:738138840790:web:c312bf3d01c52d26007377"
+};
+        // ------------------------------------------------
+
+        // Инициализация
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        // Переменные
+        let confirmationResult; // Для хранения результата отправки SMS
+        let currentUser = null;
+
+        // --- ЛОГИКА АВТОРИЗАЦИИ ---
+
+        // Настройка невидимой капчи (требование Google)
+        window.onload = function() {
+            window.recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
+                'size': 'invisible',
+                'callback': (response) => {
+                    // Капча решена
+                }
+            });
+        };
+
+        function sendSMS() {
+            const phoneNumber = document.getElementById('phoneNumber').value;
+            const appVerifier = window.recaptchaVerifier;
+
+            document.getElementById('sign-in-button').disabled = true;
+            document.getElementById('sign-in-button').innerText = "Отправка...";
+
+            auth.signInWithPhoneNumber(phoneNumber, appVerifier)
+                .then((result) => {
+                    confirmationResult = result;
+                    document.querySelector('.screen.active').classList.remove('active');
+                    document.getElementById('screen-code').classList.add('active');
+                }).catch((error) => {
+                    console.error("Ошибка SMS:", error);
+                    alert("Ошибка: " + error.message);
+                    document.getElementById('sign-in-button').disabled = false;
+                    document.getElementById('sign-in-button').innerText = "Получить код";
+                });
+        }
+
+        function verifyCode() {
+            const code = document.getElementById('verificationCode').value;
+            confirmationResult.confirm(code).then((result) => {
+                // Успешный вход!
+                currentUser = result.user;
+                initChat();
+            }).catch((error) => {
+                alert("Неверный код!");
+            });
+        }
+
+        function logout() {
+            auth.signOut();
+            location.reload();
+        }
+
+        // Следим за состоянием входа
+        auth.onAuthStateChanged(user => {
+            if (user) {
+                currentUser = user;
+                initChat();
+            }
+        });
+
+        // --- ЛОГИКА ЧАТА (REALTIME) ---
+
+        function initChat() {
+            // Переключаем экран
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById('screen-chat').classList.add('active');
+            document.getElementById('userPhoneDisplay').innerText = currentUser.phoneNumber;
+
+            // Слушаем базу данных (все сообщения)
+            // Мы сортируем по времени создания (createdAt)
+            db.collection("messages").orderBy("createdAt", "asc")
+                .onSnapshot((snapshot) => {
+                    const list = document.getElementById('messagesList');
+                    list.innerHTML = ''; // Очищаем перед обновлением (в простом варианте)
+                    
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        renderMessage(data);
+                    });
+                    
+                    // Автоскролл вниз
+                    list.scrollTop = list.scrollHeight;
+                });
+        }
+
+        function renderMessage(data) {
+            const list = document.getElementById('messagesList');
+            const div = document.createElement('div');
+            
+            // Проверяем, кто отправил (я или не я)
+            const isMe = data.uid === currentUser.uid;
+            
+            div.className = `msg ${isMe ? 'my' : 'other'}`;
+            div.innerHTML = `
+                <span class="msg-sender">${data.phone}</span>
+                ${data.text}
+            `;
+            list.appendChild(div);
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const text = input.value.trim();
+            
+            if (text && currentUser) {
+                // Отправляем в базу данных Firebase
+                db.collection("messages").add({
+                    text: text,
+                    uid: currentUser.uid,
+                    phone: currentUser.phoneNumber,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                input.value = '';
+            }
+        }
+
+        // Enter для отправки
+        document.getElementById('messageInput').addEventListener('keypress', (e) => {
+            if(e.key === 'Enter') sendMessage();
+        });
+
+    </script>
+</body>
+</html>
